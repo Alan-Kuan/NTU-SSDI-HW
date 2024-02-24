@@ -8,50 +8,82 @@
 
 extern int errno;
 
-char* buf;
-char** cmd;
+static struct {
+    char* bufs[10];
+    size_t sizes[10];
+    int idx;
+    int last_id;
+} history;
+
+static char* buf;
+static int buf_size = 128;
+
+static char** cmd;
 
 void parseLine(char** buf, size_t* len, char** cmd);
 bool handleCommand(char** cmd);
+void historyCmd(char** args);
 
 void clean(void);
 void handleError(char* msg, bool should_exit);
 
 int main(void) {
-    size_t len = 128;
+    for (int i = 0; i < 10; i++) {
+        history.bufs[i] = malloc(buf_size);
+        if (!history.bufs[i]) handleError(NULL, true);
+        history.sizes[i] = buf_size;
+    }
 
-    buf = malloc(len);
+    buf = malloc(buf_size);
     if (!buf) handleError(NULL, true);
 
     cmd = malloc(sizeof(char*) * (_POSIX_ARG_MAX + 2));  // +2 for command name and termination symbol
     if (!cmd) handleError(NULL, true);
 
+    history.idx = -1;
+    history.last_id = 0;
+
     do {
         if (putchar('$') == EOF) handleError("putchar", false);
-        parseLine(&buf, &len, cmd);
+        history.idx = (history.idx + 1) % 10;
+        history.last_id++;
+        parseLine(&history.bufs[history.idx], &history.sizes[history.idx], cmd);
     } while (handleCommand(cmd));
 
     clean();
     return 0;
 }
 
-void parseLine(char** buf, size_t* len, char** cmd) {
+void parseLine(char** hist_buf, size_t* size, char** cmd) {
     ssize_t nread;
 
-    if ((nread = getline(buf, len, stdin)) < 0) {
+    if ((nread = getline(hist_buf, size, stdin)) < 0) {
         cmd[0] = NULL;
         return;
     }
-    (*buf)[nread - 1] = '\0';  // remove '\n'
+    (*hist_buf)[nread - 1] = '\0';  // remove '\n'
+
+    // should not save an empty line or a duplicate command in history
+    if (nread == 1 || strcmp(*hist_buf, history.bufs[(history.idx + 9) % 10]) == 0) {
+        history.idx = (history.idx + 9) % 10;
+        history.last_id--;
+    }
 
     // should distinguish an empty line and an EOL (Ctrl+D)
     if (nread == 1) {
-        cmd[0] = *buf;
+        cmd[0] = *hist_buf;
         return;
     }
 
+    if (buf_size < *size) {
+        free(buf);
+        buf = malloc(*size);
+        buf_size = *size;
+    }
+    memcpy(buf, *hist_buf, nread);
+
     int i = 0;
-    cmd[i++] = strtok(*buf, " ");
+    cmd[i++] = strtok(buf, " ");
     while ((cmd[i++] = strtok(NULL, " ")) != NULL);
 }
 
@@ -67,7 +99,7 @@ bool handleCommand(char** cmd) {
         }
         if (chdir(cmd[1]) < 0) handleError(NULL, false);
     } else if (strcmp(cmd[0], "history") == 0) {
-
+        historyCmd(cmd + 1);
     } else {
 
     }
@@ -75,7 +107,41 @@ bool handleCommand(char** cmd) {
     return true;
 }
 
+void historyCmd(char** args) {
+    int print_count;
+
+    if (args[0] == NULL) {
+        print_count = 10;
+    } else if (strcmp(args[0], "-c") == 0) {
+        history.idx = -1;
+        history.last_id = 0;
+        return;
+    } else {
+        print_count = strtol(args[0], NULL, 10);
+        if (errno == EINVAL || errno == ERANGE) {
+            handleError(NULL, false);
+            return;
+        }
+        if (print_count > 10) print_count = 10;
+    }
+
+    int id = 1;
+    int idx = 0;
+
+    if (history.last_id > print_count) {
+        id = history.last_id - print_count + 1;
+        idx = (history.idx - print_count + 11) % 10;
+    }
+
+    for (; id <= history.last_id; id++, idx = (idx + 1) % 10) {
+        printf("%*d  %s\n", 5, id, history.bufs[idx]);
+    }
+}
+
 void clean(void) {
+    for (int i = 0; i < 10; i++) {
+        free(history.bufs[i]);
+    }
     free(buf);
     free(cmd);
 }
