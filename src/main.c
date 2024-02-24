@@ -11,31 +11,31 @@ extern int errno;
 char* buf;
 char** cmd;
 
-void parse_line(char** buf, size_t* len, char** cmd);
-bool handle_command(char** cmd);
+void parseLine(char** buf, size_t* len, char** cmd);
+bool handleCommand(char** cmd);
 
 void clean(void);
-void handle_error(char* msg, bool should_exit);
+void handleError(char* msg, bool should_exit);
 
 int main(void) {
     size_t len = 128;
 
     buf = malloc(len);
-    if (!buf) handle_error(NULL, true);
+    if (!buf) handleError(NULL, true);
 
     cmd = malloc(sizeof(char*) * (_POSIX_ARG_MAX + 2));  // +2 for command name and termination symbol
-    if (!cmd) handle_error(NULL, true);
+    if (!cmd) handleError(NULL, true);
 
     do {
-        if (putchar('$') == EOF) handle_error("putchar", false);
-        parse_line(&buf, &len, cmd);
-    } while (handle_command(cmd));
+        if (putchar('$') == EOF) handleError("putchar", false);
+        parseLine(&buf, &len, cmd);
+    } while (handleCommand(cmd));
 
     clean();
     return 0;
 }
 
-void parse_line(char** buf, size_t* len, char** cmd) {
+void parseLine(char** buf, size_t* len, char** cmd) {
     ssize_t nread;
 
     if ((nread = getline(buf, len, stdin)) < 0) {
@@ -55,7 +55,7 @@ void parse_line(char** buf, size_t* len, char** cmd) {
     while ((cmd[i++] = strtok(NULL, " ")) != NULL);
 }
 
-bool handle_command(char** cmd) {
+bool handleCommand(char** cmd) {
     if (cmd[0] == NULL || strcmp(cmd[0], "exit") == 0) {
         return false;
     }
@@ -65,7 +65,7 @@ bool handle_command(char** cmd) {
             fprintf(stderr, "error: 'cd' requires 1 argument\n");
             return true;
         }
-        if (chdir(cmd[1]) < 0) handle_error(NULL, false);
+        if (chdir(cmd[1]) < 0) handleError(NULL, false);
     } else if (strcmp(cmd[0], "history") == 0) {
 
     } else {
@@ -80,7 +80,7 @@ void clean(void) {
     free(cmd);
 }
 
-void handle_error(char* msg, bool should_exit) {
+void handleError(char* msg, bool should_exit) {
     if (!msg) msg = strerror(errno);
     fprintf(stderr, "error: %s\n", msg);
     if (should_exit) exit(1);
