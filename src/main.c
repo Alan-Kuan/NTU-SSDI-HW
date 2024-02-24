@@ -6,6 +6,8 @@
 #include <string.h>
 #include <unistd.h>
 
+extern int errno;
+
 char* buf;
 char** cmd;
 
@@ -13,18 +15,19 @@ void parse_line(char** buf, size_t* len, char** cmd);
 bool handle_command(char** cmd);
 
 void clean(void);
-void handle_error(int ret) {
-    if (ret == 0) return;
-    fprintf(stderr, "error: %s\n", strerror(errno));
-}
+void handle_error(char* msg, bool should_exit);
 
 int main(void) {
     size_t len = 128;
+
     buf = malloc(len);
+    if (!buf) handle_error(NULL, true);
+
     cmd = malloc(sizeof(char*) * (_POSIX_ARG_MAX + 2));  // +2 for command name and termination symbol
+    if (!cmd) handle_error(NULL, true);
 
     do {
-        putchar('$');
+        if (putchar('$') == EOF) handle_error("putchar", false);
         parse_line(&buf, &len, cmd);
     } while (handle_command(cmd));
 
@@ -41,7 +44,8 @@ void parse_line(char** buf, size_t* len, char** cmd) {
     }
     (*buf)[nread - 1] = '\0';  // remove '\n'
 
-    if (nread == 1) {  // should distinguish an empty line and an EOL (Ctrl+D)
+    // should distinguish an empty line and an EOL (Ctrl+D)
+    if (nread == 1) {
         cmd[0] = *buf;
         return;
     }
@@ -61,7 +65,7 @@ bool handle_command(char** cmd) {
             fprintf(stderr, "error: 'cd' requires 1 argument\n");
             return true;
         }
-        handle_error(chdir(cmd[1]));
+        if (chdir(cmd[1]) < 0) handle_error(NULL, false);
     } else if (strcmp(cmd[0], "history") == 0) {
 
     } else {
@@ -74,4 +78,10 @@ bool handle_command(char** cmd) {
 void clean(void) {
     free(buf);
     free(cmd);
+}
+
+void handle_error(char* msg, bool should_exit) {
+    if (!msg) msg = strerror(errno);
+    fprintf(stderr, "error: %s\n", msg);
+    if (should_exit) exit(1);
 }
