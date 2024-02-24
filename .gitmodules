@@ -1,0 +1,10 @@
+[submodule "qemu"]
+	path = qemu
+	url = https://gitlab.com/qemu-project/qemu.git
+	branch = v7.0.0
+	shallow = true
+[submodule "linux"]
+	path = linux
+	url = https://gitlab.com/torvalds/linux.git
+	branch = v5.15
+	shallow = true
