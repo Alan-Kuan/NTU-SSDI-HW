@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 extern int errno;
@@ -101,7 +102,14 @@ bool handleCommand(char** cmd) {
     } else if (strcmp(cmd[0], "history") == 0) {
         historyCmd(cmd + 1);
     } else {
-
+        switch(fork()) {
+        case -1:
+            handleError(NULL, true);
+        case 0:
+            if (execvp(cmd[0], cmd) < 0) handleError(NULL, false);
+        default:
+            if (wait(NULL) < 0) handleError(NULL, false);
+        }
     }
 
     return true;
