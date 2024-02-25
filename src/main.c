@@ -20,17 +20,16 @@ static struct {
 static char* buf;
 static int buf_size = 128;
 
-static char** cmd;
-
 static bool bufs_ready = false;
 
-void parseLine(char** buf, size_t* len, char** cmd);
-bool handleCommand(char** cmd);
-void historyCmd(char** args);
+bool handleInput(char** buf, size_t* len);
+bool handleCommand(void);
+bool runCommand(char* cmd, int fds[], int fd_in);
+void historyCmd(char** args, FILE* f_out);
 
 static void sigintHandler(int signum);
 void clean(void);
-void handleError(char* msg, bool should_exit);
+void handleError(char* msg, int should_exit);
 
 int main(void) {
     struct sigaction sa;
@@ -39,42 +38,43 @@ int main(void) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
 
-    if (sigaction(SIGINT, &sa, NULL) < 0) handleError(NULL, true);
+    if (sigaction(SIGINT, &sa, NULL) < 0) handleError(NULL, 1);
 
     for (int i = 0; i < 10; i++) {
         history.bufs[i] = malloc(buf_size);
-        if (!history.bufs[i]) handleError(NULL, true);
+        if (!history.bufs[i]) handleError(NULL, 1);
         history.sizes[i] = buf_size;
     }
 
     buf = malloc(buf_size);
-    if (!buf) handleError(NULL, true);
-
-    cmd = malloc(sizeof(char*) * (_POSIX_ARG_MAX + 2));  // +2 for command name and termination symbol
-    if (!cmd) handleError(NULL, true);
+    if (!buf) handleError(NULL, 1);
 
     bufs_ready = true;
 
     history.idx = -1;
     history.last_id = 0;
 
-    do {
-        if (putchar('$') == EOF) handleError("putchar", false);
+    while (true) {
+        if (putchar('$') == EOF) handleError("putchar", 0);
         history.idx = (history.idx + 1) % 10;
         history.last_id++;
-        parseLine(&history.bufs[history.idx], &history.sizes[history.idx], cmd);
-    } while (handleCommand(cmd));
+        if (!handleInput(&history.bufs[history.idx], &history.sizes[history.idx])) {
+            break;
+        }
+        if (!handleCommand()) {
+            break;
+        }
+    }
 
     clean();
     return 0;
 }
 
-void parseLine(char** hist_buf, size_t* size, char** cmd) {
+bool handleInput(char** hist_buf, size_t* size) {
     ssize_t nread;
 
     if ((nread = getline(hist_buf, size, stdin)) < 0) {
-        cmd[0] = NULL;
-        return;
+        return false;
     }
     (*hist_buf)[nread - 1] = '\0';  // remove '\n'
 
@@ -84,12 +84,6 @@ void parseLine(char** hist_buf, size_t* size, char** cmd) {
         history.last_id--;
     }
 
-    // should distinguish an empty line and an EOL (Ctrl+D)
-    if (nread == 1) {
-        cmd[0] = *hist_buf;
-        return;
-    }
-
     if (buf_size < *size) {
         free(buf);
         buf = malloc(*size);
@@ -97,40 +91,86 @@ void parseLine(char** hist_buf, size_t* size, char** cmd) {
     }
     memcpy(buf, *hist_buf, nread);
 
-    int i = 0;
-    cmd[i++] = strtok(buf, " ");
-    while ((cmd[i++] = strtok(NULL, " ")) != NULL);
+    return true;
 }
 
-bool handleCommand(char** cmd) {
-    if (cmd[0] == NULL || strcmp(cmd[0], "exit") == 0) {
-        return false;
-    }
+bool handleCommand(void) {
+    if (buf[0] == '\0') return true;
 
-    if (strcmp(cmd[0], "cd") == 0) {
-        if (cmd[1] == NULL) {
+    char* saveptr_pipe;
+    int fds[2];
+    int fd_in = -1;
+
+    char* cmd = strtok_r(buf, "|", &saveptr_pipe);
+    char* cmd_next;
+    while ((cmd_next = strtok_r(NULL, "|", &saveptr_pipe)) != NULL) {
+        if (pipe(fds) < 0) handleError(NULL, 1);
+        if (!runCommand(cmd, fds, fd_in)) {
+            return false;
+        }
+        cmd = cmd_next;
+        fd_in = fds[0];
+    }
+    return runCommand(cmd, NULL, fd_in);
+}
+
+bool runCommand(char* cmd, int fds[], int fd_in) {
+    char* saveptr_space;
+    char* argv[_POSIX_ARG_MAX + 2];  // +2 for command name and termination symbol
+    int argv_len = 0;
+
+    argv[argv_len++] = strtok_r(cmd, " ", &saveptr_space);
+    while ((argv[argv_len++] = strtok_r(NULL, " ", &saveptr_space)) != NULL);
+
+    if (strcmp(argv[0], "exit") == 0) {
+        return false;
+    } else if (strcmp(argv[0], "cd") == 0) {
+        if (argv[1] == NULL) {
             fprintf(stderr, "error: 'cd' requires 1 argument\n");
             return true;
         }
-        if (chdir(cmd[1]) < 0) handleError(NULL, false);
-    } else if (strcmp(cmd[0], "history") == 0) {
-        historyCmd(cmd + 1);
+        if (chdir(argv[1]) < 0) handleError(NULL, 0);
+    } else if (strcmp(argv[0], "history") == 0) {
+        if (fds) {
+            FILE* f_out = fdopen(fds[1], "w");
+            if (!f_out) handleError(NULL, 1);
+            historyCmd(argv + 1, f_out);
+            if (fclose(f_out) == EOF) handleError(NULL, 0);
+        } else {
+            historyCmd(argv + 1, stdout);
+        }
     } else {
-        switch(fork()) {
+        switch (fork()) {
         case -1:
-            handleError(NULL, true);
+            handleError(NULL, 1);
         case 0:
-            if (execvp(cmd[0], cmd) < 0) handleError(NULL, false);
-            exit(0);
+            if (fds) {
+                if (close(fds[0]) < 0) handleError(NULL, 2);  // close unused read end
+                if (dup2(fds[1], STDOUT_FILENO) < 0) handleError(NULL, 2);  // overwrite with write end
+                if (close(fds[1]) < 0) handleError(NULL, 2);
+            }
+            if (fd_in >= 0) {
+                if (dup2(fd_in, STDIN_FILENO) < 0) handleError(NULL, 2);  // overwrite with preserved read end
+                if (close(fd_in) < 0) handleError(NULL, 2);
+            }
+
+            if (execvp(argv[0], argv) < 0) handleError(NULL, 2);
         default:
-            if (wait(NULL) < 0) handleError(NULL, false);
+            if (fds) {
+                if (close(fds[1]) < 0) handleError(NULL, 1);  // close unused write end
+            }
+            if (fd_in >= 0) {
+                if (close(fd_in) < 0) handleError(NULL, 1);  // close unused preserved read end
+            }
+
+            if (wait(NULL) < 0) handleError(NULL, 0);
         }
     }
 
     return true;
 }
 
-void historyCmd(char** args) {
+void historyCmd(char** args, FILE* f_out) {
     int print_count;
 
     if (args[0] == NULL) {
@@ -142,7 +182,7 @@ void historyCmd(char** args) {
     } else {
         print_count = strtol(args[0], NULL, 10);
         if (errno == EINVAL || errno == ERANGE) {
-            handleError(NULL, false);
+            handleError(NULL, 0);
             return;
         }
         if (print_count > 10) print_count = 10;
@@ -157,8 +197,9 @@ void historyCmd(char** args) {
     }
 
     for (; id <= history.last_id; id++, idx = (idx + 1) % 10) {
-        printf("%*d  %s\n", 5, id, history.bufs[idx]);
+        fprintf(f_out, "%*d  %s\n", 5, id, history.bufs[idx]);
     }
+    fflush(f_out);
 }
 
 static void sigintHandler(int signum) {
@@ -171,11 +212,17 @@ void clean(void) {
         free(history.bufs[i]);
     }
     free(buf);
-    free(cmd);
 }
 
-void handleError(char* msg, bool should_exit) {
+void handleError(char* msg, int should_exit) {
     if (!msg) msg = strerror(errno);
     fprintf(stderr, "error: %s\n", msg);
-    if (should_exit) exit(1);
+    if (should_exit) {
+        if (bufs_ready) clean();
+        if (should_exit == 1) {
+            exit(1);
+        } else if (should_exit == 2) {
+            _exit(1);
+        }
+    }
 }
