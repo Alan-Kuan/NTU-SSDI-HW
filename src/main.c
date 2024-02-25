@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <limits.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,14 +22,25 @@ static int buf_size = 128;
 
 static char** cmd;
 
+static bool bufs_ready = false;
+
 void parseLine(char** buf, size_t* len, char** cmd);
 bool handleCommand(char** cmd);
 void historyCmd(char** args);
 
+static void sigintHandler(int signum);
 void clean(void);
 void handleError(char* msg, bool should_exit);
 
 int main(void) {
+    struct sigaction sa;
+
+    sa.sa_handler = sigintHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGINT, &sa, NULL) < 0) handleError(NULL, true);
+
     for (int i = 0; i < 10; i++) {
         history.bufs[i] = malloc(buf_size);
         if (!history.bufs[i]) handleError(NULL, true);
@@ -40,6 +52,8 @@ int main(void) {
 
     cmd = malloc(sizeof(char*) * (_POSIX_ARG_MAX + 2));  // +2 for command name and termination symbol
     if (!cmd) handleError(NULL, true);
+
+    bufs_ready = true;
 
     history.idx = -1;
     history.last_id = 0;
@@ -144,6 +158,11 @@ void historyCmd(char** args) {
     for (; id <= history.last_id; id++, idx = (idx + 1) % 10) {
         printf("%*d  %s\n", 5, id, history.bufs[idx]);
     }
+}
+
+static void sigintHandler(int signum) {
+    if (bufs_ready) clean();
+    exit(1);
 }
 
 void clean(void) {
