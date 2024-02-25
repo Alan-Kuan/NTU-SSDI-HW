@@ -121,6 +121,7 @@ bool handleCommand(char** cmd) {
             handleError(NULL, true);
         case 0:
             if (execvp(cmd[0], cmd) < 0) handleError(NULL, false);
+            exit(0);
         default:
             if (wait(NULL) < 0) handleError(NULL, false);
         }
