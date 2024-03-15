@@ -9,6 +9,7 @@ FS=cloud.img
 CMDLINE="earlycon=pl011,0x09000000"
 DUMPDTB=""
 DTB=""
+SHARED_DIR=./shared
 
 usage() {
 	U=""
@@ -98,3 +99,4 @@ qemu-system-aarch64 -nographic -machine virt,gic-version=2 -m 1024 -cpu cortex-a
 	-append "console=ttyAMA0 root=/dev/vda rw $CMDLINE" \
 	-netdev user,id=net0,hostfwd=tcp::2222-:22 \
         -device virtio-net-pci,netdev=net0,mac=de:ad:be:ef:41:49 \
+    -virtfs local,path=$SHARED_DIR,mount_tag=shared,security_model=passthrough,readonly=on \
