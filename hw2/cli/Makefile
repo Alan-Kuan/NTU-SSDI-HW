@@ -1,5 +1,5 @@
 CC = $(CROSS)gcc
-CFLAGS = -Wall -I $(INCLUDE)
+CFLAGS = -Wall -static -I $(INCLUDE)
 INCLUDE = ../module
 EXE = rk
 
